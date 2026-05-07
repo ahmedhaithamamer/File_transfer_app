@@ -53,10 +53,10 @@ documentaion/*.toc
 documentaion/*.pdf
 documentaion
 
-docs/*.md
+docs/
 dist/LANShare
 dist/*.rar
 dist/received_files
 
-/*.pdf
-NETWORKING.md
+*.pdf
+submission/

@@ -1,13 +1,3 @@
-"""
-Entry point for LAN Share.
-
-Usage:
-    python main.py
-    python main.py --name "Ahmad-Laptop"
-    python main.py --tcp-port 5002
-    python main.py --save-dir D:\\downloads
-"""
-
 import argparse
 import os
 import sys
