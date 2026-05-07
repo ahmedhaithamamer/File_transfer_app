@@ -1,13 +1,3 @@
-"""
-Tkinter user interface.
-
-Left pane  : manual peer entry (IP + port) — no UDP discovery needed.
-Right pane : file picker, transfer progress, log.
-
-All cross-thread communication uses queue.Queue because Tkinter is
-NOT thread-safe: only the main thread may touch widgets directly.
-"""
-
 import json
 import os
 import queue

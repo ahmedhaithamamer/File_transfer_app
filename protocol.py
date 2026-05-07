@@ -1,33 +1,3 @@
-"""
-Application-layer protocol — wire format and message helpers.
-
-NETWORKING NOTES (for the discussion)
-=====================================
-
-This module sits *on top of* TCP and adds two things
-TCP alone does not give you:
-
-  1. **Message framing**:  TCP is a byte stream — there are no "messages" at
-     the transport layer.  We add our own framing: every message starts
-     with a 4-byte big-endian length prefix followed by a JSON header.
-     This lets `recv_msg()` know exactly how many bytes to read for one
-     logical message, no matter how the kernel chops up the stream.
-
-  2. **A typed message vocabulary**:  every message has a "type" field
-     (METADATA, DATA, ACK, …) so both sides know how to interpret the
-     header that follows.
-
-Wire format on TCP:
-
-    ┌───────────────────────────┐
-    │ 4 bytes : header_len      │  big-endian uint32
-    ├───────────────────────────┤
-    │ header_len bytes : JSON   │  e.g. {"type":"DATA","payload_size":4096}
-    ├───────────────────────────┤
-    │ N bytes : binary payload  │  ONLY for DATA messages
-    └───────────────────────────┘
-"""
-
 import json
 import struct
 
