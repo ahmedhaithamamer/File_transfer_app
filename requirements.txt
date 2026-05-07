@@ -1,0 +1,9 @@
+# No third-party packages required.
+# The entire project runs on the Python 3.11+ standard library only.
+#
+# Python >= 3.11 is required for the `X | Y` union type hint syntax used
+# in annotations (e.g. `int | None`).  On Python 3.9/3.10 you can replace
+# those with `Optional[X]` from `typing` if needed.
+#
+# Verify your Python version:
+#   python --version
