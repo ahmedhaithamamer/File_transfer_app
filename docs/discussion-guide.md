@@ -1,4 +1,4 @@
-﻿# Networks Course Discussion Guide
+# Networks Course Discussion Guide
 
 This guide is written for your viva/discussion so the networking terms are explicit and easy to explain.
 

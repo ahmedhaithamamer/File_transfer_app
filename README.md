@@ -1,165 +1,177 @@
-# LAN Share — TCP File Transfer
+# LAN Share
 
-A peer-to-peer file sharing application for the local network.  
-Each device runs one process: it **listens** for incoming files over TCP, and can **send** files to any device whose IP address you know.  
-File integrity is verified end-to-end with **SHA-256**.
+Reliable peer-to-peer file transfer over a local network using Python sockets and Tkinter.
 
-> For a deep dive into the networking design, read **[NETWORKING.md](NETWORKING.md)**.
+Each device runs one app instance that:
+- listens for incoming files on TCP,
+- sends files to known peers (manual IP + port),
+- verifies every received file with SHA-256,
+- keeps a persistent peer list for quick reuse.
 
----
+This repository is designed for academic networking discussions and practical demos.
 
-## Quick start
+> Prefer a no-setup run? Use the packaged executable at `dist/LANShare/LANShare.exe` directly (no Python installation required).
 
-**On every device:**
+## Highlights
+
+- **TCP-only transfer flow** for predictable behavior across networks.
+- **Custom application-layer protocol** with explicit message framing.
+- **Multi-file transfer** in one session.
+- **Receiver approval dialog** (Accept/Reject) before transfer starts.
+- **Per-chunk ACKs** with live progress and speed.
+- **End-to-end SHA-256 integrity check** after each file.
+- **Persistent peers** in local JSON storage.
+- **Peer management UX**: add, auto-save on accepted incoming transfer, right-click edit/delete.
+- **Open received folder** directly from the UI.
+- **No third-party runtime dependencies** (Python standard library only).
+
+## Demo Snapshot
+
+Sender connects to receiver over TCP and exchanges:
+`REQUEST -> RESPONSE -> METADATA -> DATA/ACK ... -> DONE/ACK -> SESSION_DONE/ACK`
+
+All traffic runs on a configurable TCP port (default: `5001`).
+
+## Repository Structure
+
+```text
+File_transfer_app/
+|- main.py                 # App entry point and CLI flags
+|- ui.py                   # Tkinter interface and user actions
+|- transfer.py             # TCP sender/receiver logic
+|- protocol.py             # Framing and protocol message helpers
+|- utils.py                # Hashing, chunk iteration, formatting, identity helpers
+|- config.py               # Config constants (ports, buffers, timeouts, paths)
+|- tests/test_app.py       # Automated tests
+|- NETWORKING.md           # Networking-focused explanation
+|- documentaion/report.tex # LaTeX project report
+`- README.md
+```
+
+## Requirements
+
+- Python **3.11+**
+- OS: Windows / Linux / macOS (tested primarily on Windows)
+
+Install dependencies:
+
+```powershell
+pip install -r requirements.txt
+```
+
+Note: runtime uses standard library only.
+
+## Run the App
 
 ```powershell
 python main.py
 ```
 
 Optional flags:
+
 ```powershell
-python main.py --name "Ahmad-Laptop"
-python main.py --tcp-port 5002          # if 5001 is taken
+python main.py --name "My-Laptop"
+python main.py --tcp-port 5002
 python main.py --save-dir D:\downloads
 ```
 
-**How to connect:**
+## How to Use (Two Devices)
 
-1. Both devices launch the app.
-2. **Device A** finds its IP address:
-   ```powershell
-   ipconfig        # look for IPv4 Address, e.g. 192.168.1.10
-   ```
-3. **Device B** types that IP into the *IP Address* field, enters the port (`5001`), optionally a label, and clicks **Add Peer**.
-4. Select the peer in the list, click **Browse Files…**, click **Send**.
-5. Device A gets a popup → **Accept** → files arrive in `received_files/`.
+1. Launch app on both devices.
+2. On receiver device, find IPv4:
+   - Windows: `ipconfig`
+   - Linux/macOS: `ip a` or `ifconfig`
+3. On sender app, add peer using receiver IP + receiver TCP port.
+4. Select peer, choose files, click **Send**.
+5. Receiver clicks **Accept**.
+6. Files are saved to `received_files/` (or your custom `--save-dir`).
 
----
+## Same-Machine Test
 
-## Test on one machine (two terminals)
+Run two instances on different TCP ports:
 
 ```powershell
-# Terminal 1  (receives on 5001)
+# Terminal 1
 python main.py --name "Device-A" --tcp-port 5001
 
-# Terminal 2  (receives on 5002)
+# Terminal 2
 python main.py --name "Device-B" --tcp-port 5002
 ```
 
-In Device-B's window: IP = `127.0.0.1`, Port = `5001`, click Add Peer.  
-In Device-A's window: IP = `127.0.0.1`, Port = `5002`, click Add Peer.  
-Send files either way.
+Then:
+- In Device-A, add peer `127.0.0.1:5002`
+- In Device-B, add peer `127.0.0.1:5001`
 
----
+## Protocol Overview
 
-## Project structure
+TCP stream framing:
 
-7 flat Python files, **zero external dependencies** (Python 3.11+ stdlib only):
+1. `4-byte big-endian header length`
+2. `JSON header`
+3. `optional binary payload` (for `DATA`)
 
-```
-File_transfer_app/
-├── protocol.py     # Wire format: 4-byte framing + JSON header + binary payload
-├── transfer.py     # TCP: send_files()  +  serve_forever()
-├── ui.py           # Tkinter app — peer entry, file picker, progress, log
-├── utils.py        # SHA-256, chunking, formatting, persistent device ID
-├── config.py       # All ports, sizes, timeouts in one place
-├── main.py         # Entry point
-├── tests/
-│   └── test_app.py # Protocol + transfer tests
-├── NETWORKING.md   # Network architecture for the course discussion
-└── README.md
-```
+Core message types:
+- `REQUEST`, `RESPONSE`
+- `METADATA`, `DATA`, `ACK`, `DONE`
+- `SESSION_DONE`
+- `CANCEL`, `ERROR`
 
----
+See `protocol.py` and `transfer.py` for implementation details.
 
-## Architecture
+## Testing
 
-```
-┌─────────────────────────────────────────────────────────┐
-│  Device A (sender)              Device B (receiver)      │
-│                                                          │
-│  user types B's IP:port         TCP server listening     │
-│                                                          │
-│  TCP connect ──────────────────────────────────────────► │
-│              ◄──────── REQUEST accepted? ───────────────  │
-│  send METADATA + DATA chunks ──────────────────────────► │
-│              ◄──────────────── ACK per chunk ───────────  │
-│  send DONE ────────────────────────────────────────────► │
-│              ◄──────── ACK + SHA-256 verified ──────────  │
-└─────────────────────────────────────────────────────────┘
-         All traffic: TCP port 5001 (configurable)
-```
-
----
-
-## Application-layer protocol
-
-Every TCP message is framed identically:
-
-```
-┌─────────────────────────────┐
-│ 4 bytes: header_len (BE u32)│
-├─────────────────────────────┤
-│ header_len bytes: JSON      │  e.g. {"type":"DATA","payload_size":262144}
-├─────────────────────────────┤
-│ N bytes: binary payload     │  ← DATA messages only
-└─────────────────────────────┘
-```
-
-### Message flow
-
-| Step | Type | Direction | Content |
-|------|------|-----------|---------|
-| 1 | `REQUEST` | Sender → Receiver | file manifest, total size |
-| 2 | `RESPONSE` | Receiver → Sender | `{accepted: true/false}` |
-| 3 | `METADATA` | Sender → Receiver | filename, size, sha256, chunk_size |
-| 4 | `DATA` | Sender → Receiver | one binary chunk |
-| 5 | `ACK` | Receiver → Sender | per-chunk acknowledgement |
-| 6 | `DONE` | Sender → Receiver | end of file |
-| 7 | `ACK` | Receiver → Sender | SHA-256 verified OK |
-| 8 | `SESSION_DONE` | Sender → Receiver | all files transferred |
-
-Steps 3–7 repeat for every file in a multi-file send.
-
----
-
-## Running the tests
+Run all tests:
 
 ```powershell
 python -m unittest discover -s tests -v
 ```
 
-Tests cover:
-- TCP framing round-trips (METADATA, DATA, REQUEST)
-- Single-file transfer, multi-file session, empty file, exact chunk boundary
-- Receiver rejects transfer
-- Sender cancels mid-transfer
-- Connection refused handling
+Coverage includes:
+- protocol framing round-trips,
+- single and multi-file transfer,
+- empty file and chunk-boundary behavior,
+- rejection, cancellation, and connection-refused handling.
 
----
+## Packaging (Optional)
 
-## Configuration (`config.py`)
+To build executable (if needed for distribution), use PyInstaller.
+Spec files are not required; PyInstaller can regenerate them.
 
-| Constant | Default | Purpose |
-|---|---|---|
-| `TCP_PORT` | 5001 | TCP listener port |
-| `CHUNK_SIZE` | 256 KB | Bytes per DATA message |
-| `SOCKET_BUFFER` | 1 MB | TCP send/receive buffer |
-| `SAVE_DIR` | `received_files/` | Where received files land |
+If a packaged build is available in this repository, run:
 
----
+`dist/LANShare/LANShare.exe`
+
+No Python setup is required for that executable.
+
+## Configuration
+
+Main values in `config.py`:
+- `TCP_PORT` (default `5001`)
+- `CHUNK_SIZE` (`256 * 1024`)
+- `SOCKET_BUFFER` (`1024 * 1024`)
+- `CONNECT_TIMEOUT`, `TRANSFER_TIMEOUT`, `ACCEPT_TIMEOUT`
+- `SAVE_DIR`, `DEVICE_FILE`, `PEERS_FILE`
+
+## Documentation
+
+- Networking explanation: `NETWORKING.md`
+- Submission report (LaTeX): `documentaion/report.tex`
 
 ## Troubleshooting
 
-**Can't connect to the other device**
-- Make sure both are on the **same Wi-Fi network**.
-- Find the receiver's IP with `ipconfig` (Windows) or `ip a` (Linux/Mac).
-- Allow Python through **Windows Firewall** on the TCP port (5001).
-- If using a hotspot, ensure clients are not isolated from each other.
-
-**Transfer fails mid-way**
-- Check the log panel — SHA-256 mismatch or a `CANCEL` message will appear.
-- Retry; TCP will reconnect cleanly.
+**Cannot connect to other device**
+- Ensure both devices are on the same LAN.
+- Verify receiver IP and TCP port are correct.
+- Allow Python through firewall for selected TCP port.
 
 **Port already in use**
-- Change with `--tcp-port 5002` on one device; type the matching port when adding that peer.
+- Start app with another port, e.g. `--tcp-port 5002`.
+- Add peer with the same port you configured.
+
+**Transfer interrupted or failed**
+- Check in-app log for timeout, reject, cancel, or checksum messages.
+- Retry transfer after verifying connectivity.
+
+## Project Context
+
+This project was developed for **ECE338: Computer Networks** as a practical implementation of socket programming, transport reliability, and application-layer protocol design.

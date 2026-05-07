@@ -1,101 +1,34 @@
-# Networking Architecture — LAN Share
+# Networking Architecture — LAN Share (TCP-Only)
 
-This document explains the project from a **networking perspective**, mapping every piece of code to the textbook concept it implements. Read it alongside [protocol.py](protocol.py), [discovery.py](discovery.py), and [transfer.py](transfer.py).
+This document explains the final system from a networking perspective. The
+current implementation uses only TCP for transfer; peer selection is manual
+(IP + port) in the UI.
 
 ---
 
 ## 1. The OSI / TCP-IP layers used
 
 ```
-┌────────────────────────────────────────────────────────┐
-│ Application layer  │ JSON-framed protocol (our code)    │
-├────────────────────┼────────────────────────────────────┤
-│ Transport layer    │ TCP   (file transfer)              │
-│                    │ UDP   (device discovery)           │
-├────────────────────┼────────────────────────────────────┤
-│ Network layer      │ IP                                 │
-├────────────────────┼────────────────────────────────────┤
-│ Link layer         │ Ethernet / Wi-Fi (handled by OS)   │
-└────────────────────┴────────────────────────────────────┘
+Application layer: custom framed protocol (this project)
+Transport layer:   TCP
+Network layer:     IP
+Link layer:        Ethernet / Wi-Fi (handled by OS)
 ```
-
-We write code at the **Application layer**. The OS handles everything below.
 
 ---
 
-## 2. Why two transport protocols?
+## 2. Why TCP
 
-| Concern | Discovery | File transfer |
-|---|---|---|
-| Recipient known in advance? | No | Yes (chosen from peer list) |
-| Reliability needed? | No (next HELLO replaces lost ones) | Yes — every byte must arrive |
-| Ordering needed? | No | Yes — chunk N before chunk N+1 |
-| Connection setup OK? | No (connection-less, no handshake) | Yes (3-way handshake is fine once) |
-| **Choice** | **UDP** | **TCP** |
+File transfer requires:
+- reliability (every byte arrives),
+- ordering (chunk N before N+1),
+- flow control (sender does not overflow receiver).
 
-This is the classic textbook split: **UDP for announcements, TCP for streams.**
+TCP provides these natively, so we avoid reimplementing transport logic.
 
 ---
 
-## 3. Discovery: UDP multicast
-
-### Why multicast (239.42.42.42), not broadcast (255.255.255.255)?
-
-UDP broadcast is the textbook example, and it works on most LANs. We use **multicast** for one practical reason: **on Windows, when two processes on the same machine both bind UDP port 5002, only one receives broadcasted packets** — broadcast delivery is undefined when multiple sockets share a port. Multicast delivery, in contrast, is **duplicated to every socket that has joined the group**, so two processes on the same PC reliably discover each other.
-
-Multicast group `239.42.42.42` is in the **locally-scoped administrative range** (`239.0.0.0/8`, see [RFC 2365](https://tools.ietf.org/html/rfc2365)). With **TTL=1** the packets travel exactly one hop — never crossing routers, staying on the local LAN.
-
-### The three threads inside `Discovery` ([discovery.py](discovery.py))
-
-```mermaid
-flowchart LR
-    Beacon["beacon_loop\n(every 3s)"] -->|"sendto(239.42.42.42:5002)"| Net((LAN))
-    Net -->|"recvfrom"| Listener["listener_loop\n(blocking)"]
-    Listener --> PeerDict["self.peers\n(device_id → Peer)"]
-    Sweeper["sweeper_loop\n(every 2s)"] -->|"drop if last_seen > 10s ago"| PeerDict
-```
-
-### The `HELLO` packet (one UDP datagram)
-
-```json
-{
-  "type":      "HELLO",
-  "device_id": "5f3c7b...",      // stable per-machine UUID
-  "name":      "Ahmad-Laptop",   // friendly name shown in UI
-  "tcp_port":  5001,             // where to TCP-connect to send files
-  "version":   2
-}
-```
-
-### Key socket calls (with line references)
-
-**Sender side** ([discovery.py](discovery.py) `_make_sender`):
-```python
-s = socket.socket(AF_INET, SOCK_DGRAM)              # UDP socket
-s.setsockopt(IPPROTO_IP, IP_MULTICAST_TTL, 1)       # local LAN only
-s.setsockopt(IPPROTO_IP, IP_MULTICAST_LOOP, 1)      # see our own packets
-s.sendto(packet, ("239.42.42.42", 5002))            # ← send the datagram
-```
-
-**Receiver side** ([discovery.py](discovery.py) `_make_listener`):
-```python
-s = socket.socket(AF_INET, SOCK_DGRAM)
-s.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)           # share port with siblings
-s.bind(("", 5002))                                  # listen on all interfaces
-mreq = struct.pack("4sl", inet_aton("239.42.42.42"), INADDR_ANY)
-s.setsockopt(IPPROTO_IP, IP_ADD_MEMBERSHIP, mreq)   # ← join multicast group
-data, addr = s.recvfrom(4096)                        # ← receive datagram
-```
-
-`IP_ADD_MEMBERSHIP` tells the kernel: "I want to receive packets sent to multicast group X on any interface." Without it, the kernel filters multicast packets out.
-
-### Peer expiry (TTL)
-
-Peers have a `last_seen` timestamp. The `sweeper_loop` runs every 2 seconds and removes entries older than `PEER_TTL=10` seconds. So when a laptop closes its lid, everyone notices within 10 seconds — even though no `BYE` was sent.
-
----
-
-## 4. File transfer: TCP
+## 3. File transfer flow
 
 ### Why we still need application-layer logic on top of TCP
 
@@ -198,7 +131,7 @@ SHA-256 is computed by the **sender** before transmission and verified by the **
 
 ---
 
-## 5. Concurrency model
+## 4. Concurrency model
 
 The app uses **OS threads**, not async I/O, because socket programming with threads is the textbook model and easier to reason about for a course discussion.
 
@@ -206,20 +139,16 @@ The app uses **OS threads**, not async I/O, because socket programming with thre
 flowchart TB
     subgraph MainProcess [LAN Share Process]
         UIThread["Main thread<br/>(Tkinter UI)"]
-        BeaconT["beacon thread<br/>send HELLO every 3s"]
-        ListenerT["listener thread<br/>UDP recvfrom"]
-        SweeperT["sweeper thread<br/>expire stale peers"]
         AcceptT["TCP accept thread<br/>server.accept()"]
         RecvT1["receiver handler 1<br/>(spawned per connection)"]
         RecvT2["receiver handler 2<br/>(spawned per connection)"]
         SendT["sender thread<br/>(spawned per outgoing transfer)"]
     end
 
-    UIThread -.->|"queue.Queue"| BeaconT
-    UIThread -.->|"queue.Queue"| ListenerT
     UIThread -.->|"queue.Queue"| AcceptT
     AcceptT --> RecvT1
     AcceptT --> RecvT2
+    UIThread --> SendT
 ```
 
 ### Thread safety
@@ -228,7 +157,7 @@ Tkinter is **not** thread-safe — only the main thread may touch widgets. Every
 
 ---
 
-## 6. Reliability summary
+## 5. Reliability summary
 
 | Failure mode | What catches it |
 |---|---|
@@ -240,30 +169,26 @@ Tkinter is **not** thread-safe — only the main thread may touch widgets. Every
 | Bit corruption *outside* the TCP stack (NIC, RAM, disk) | **Application-level SHA-256** at end of each file |
 | Receiver rejects the transfer | `RESPONSE { accepted: false }` |
 | Sender or receiver crashes | TCP RST → other side gets `ConnectionResetError` |
-| Discovery packet lost | Next HELLO replaces it (every 3 s) |
-| Peer goes offline | Peer entry expires after 10 s of silence |
 
 ---
 
-## 7. What you can demonstrate live
+## 6. What you can demonstrate live
 
 | Question the prof might ask | Demo / answer |
 |---|---|
 | "Show me the TCP three-way handshake" | Wireshark filter: `tcp.port == 5001` while clicking Send. Three packets: SYN, SYN+ACK, ACK |
 | "Show me the application-layer messages" | Wireshark "Follow TCP Stream" — you can see the JSON headers in cleartext |
 | "What if you remove SHA-256?" | Comment out the verification block → flip a bit in a received file → silently corrupted, sender thinks it succeeded |
-| "What if you use UDP for transfer?" | Would need to implement reliability (sequence numbers, retransmission, ordering) — i.e. reinvent TCP poorly |
-| "Why multicast not broadcast?" | Two processes on the same Windows machine sharing UDP port 5002 — multicast delivers to both, broadcast doesn't |
-| "How does discovery survive packet loss?" | Each HELLO is independent; the next one (3 s later) re-announces. TTL=10 s gives 3 chances before a peer expires |
+| "How do peers find each other?" | In this final version, user enters IP and port manually for predictable behavior. |
 | "What's the security model?" | Receiver shows a dialog with the file list before any DATA is sent. Currently no encryption — could add TLS via `ssl.wrap_socket()` in ~5 lines |
 
 ---
 
-## 8. Suggested talking points
+## 7. Suggested talking points
 
 1. **"We chose TCP for transfer because we need ordering, reliability, and flow control — these are exactly what TCP provides for free, and reimplementing them on UDP would mean writing a worse TCP."**
 
-2. **"We chose UDP for discovery because it's connectionless. We don't know who the peers are yet, and we don't need reliability — if a HELLO is lost, the next one (3 seconds later) will replace it."**
+2. **"We removed automatic discovery from the final version and use manual IP + port selection for consistent behavior across networks and easier demos."**
 
 3. **"TCP gives us a byte stream, not a message stream. Our framing layer (4-byte length prefix + JSON header) recovers message boundaries — without it, `recv()` would return arbitrary fragments."**
 
@@ -271,4 +196,4 @@ Tkinter is **not** thread-safe — only the main thread may touch widgets. Every
 
 5. **"End-to-end integrity needs end-to-end checks. TCP's 16-bit checksum protects only the network path. SHA-256 over the whole file protects against everything — including bugs in our own code."**
 
-6. **"Multicast is a network-layer feature implemented by IGMP. We join group 239.42.42.42 with `IP_ADD_MEMBERSHIP`, the kernel sends an IGMP report, and the local switch starts forwarding multicast frames to our interface. TTL=1 keeps us on the LAN."**
+6. **"Future enhancement could add authenticated device discovery, but keeping TCP-only flow makes the course discussion cleaner and more robust."**

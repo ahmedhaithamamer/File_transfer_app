@@ -1,5 +1,5 @@
 """
-Tests for the LAN Share app — protocol, discovery, and end-to-end transfer.
+Tests for the LAN Share app — protocol and end-to-end transfer.
 
 Run from the project root:
     python -m unittest discover -s tests -v
@@ -19,12 +19,11 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 import protocol
 import transfer
-from discovery import Discovery, Peer
-from utils import compute_sha256, Device
+from utils import compute_sha256
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# protocol.py — TCP framing + UDP encode/decode
+# protocol.py — TCP framing
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestProtocol(unittest.TestCase):
@@ -73,78 +72,6 @@ class TestProtocol(unittest.TestCase):
             self.assertEqual(msg["manifest"], manifest)
         finally:
             cli.close(); srv.close()
-
-    def test_udp_encode_decode(self):
-        packet = protocol.encode_udp(protocol.HELLO,
-                                     device_id="abc", name="A", tcp_port=1, version=2)
-        msg = protocol.decode_udp(packet)
-        self.assertIsNotNone(msg)
-        self.assertEqual(msg["type"],     protocol.HELLO)
-        self.assertEqual(msg["tcp_port"], 1)
-
-    def test_udp_decode_garbage_returns_none(self):
-        self.assertIsNone(protocol.decode_udp(b"not json"))
-        self.assertIsNone(protocol.decode_udp(b'{"no_type":true}'))
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# discovery.py — two Discovery instances on the same machine find each other
-# ─────────────────────────────────────────────────────────────────────────────
-
-class TestDiscovery(unittest.TestCase):
-    """
-    Critical same-machine scenario: two Discovery instances must each see
-    the other.  Tests use a dedicated UDP port + multicast group to avoid
-    clashing with a live app instance.
-    """
-
-    TEST_UDP_PORT  = 25_555
-    TEST_MCAST     = "239.42.42.99"
-
-    def test_two_discoveries_find_each_other(self):
-        a = Device(device_id="dev-a", name="A")
-        b = Device(device_id="dev-b", name="B")
-        d_a = Discovery(device=a, tcp_port=5001,
-                        udp_port=self.TEST_UDP_PORT, multicast_group=self.TEST_MCAST)
-        d_b = Discovery(device=b, tcp_port=5002,
-                        udp_port=self.TEST_UDP_PORT, multicast_group=self.TEST_MCAST)
-        try:
-            d_a.start(); d_b.start()
-            deadline = time.time() + 5.0
-            while time.time() < deadline and (
-                len(d_a.peers) == 0 or len(d_b.peers) == 0
-            ):
-                time.sleep(0.1)
-            self.assertEqual(len(d_a.peers), 1, "A never saw B")
-            self.assertEqual(len(d_b.peers), 1, "B never saw A")
-        finally:
-            d_a.stop(); d_b.stop()
-
-    def test_same_device_id_different_tcp_ports_still_discover(self):
-        """
-        Same-machine real-world case: both instances may share the same
-        persisted device_id. They must still discover each other when their
-        TCP listener ports differ.
-        """
-        shared_id = "shared-dev-id"
-        a = Device(device_id=shared_id, name="A")
-        b = Device(device_id=shared_id, name="B")
-        d_a = Discovery(device=a, tcp_port=5011,
-                        udp_port=self.TEST_UDP_PORT + 1, multicast_group=self.TEST_MCAST)
-        d_b = Discovery(device=b, tcp_port=5013,
-                        udp_port=self.TEST_UDP_PORT + 1, multicast_group=self.TEST_MCAST)
-        try:
-            d_a.start(); d_b.start()
-            deadline = time.time() + 5.0
-            while time.time() < deadline and (
-                len(d_a.peers) == 0 or len(d_b.peers) == 0
-            ):
-                time.sleep(0.1)
-            self.assertGreaterEqual(len(d_a.peers), 1, "A never saw B (same device_id case)")
-            self.assertGreaterEqual(len(d_b.peers), 1, "B never saw A (same device_id case)")
-        finally:
-            d_a.stop(); d_b.stop()
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # transfer.py — full end-to-end file transfer over TCP loopback

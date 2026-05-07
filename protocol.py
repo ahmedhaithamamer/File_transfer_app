@@ -4,7 +4,7 @@ Application-layer protocol — wire format and message helpers.
 NETWORKING NOTES (for the discussion)
 =====================================
 
-This module sits *on top of* TCP (or UDP for discovery) and adds two things
+This module sits *on top of* TCP and adds two things
 TCP alone does not give you:
 
   1. **Message framing**:  TCP is a byte stream — there are no "messages" at
@@ -26,10 +26,6 @@ Wire format on TCP:
     ├───────────────────────────┤
     │ N bytes : binary payload  │  ONLY for DATA messages
     └───────────────────────────┘
-
-Wire format on UDP (discovery):
-    A single JSON-encoded packet, no length prefix needed because UDP
-    preserves message boundaries (datagrams).
 """
 
 import json
@@ -45,11 +41,6 @@ DONE      = "DONE"        # sender → receiver: end of one file
 SESSION_DONE = "SESSION_DONE"  # sender → receiver: end of the whole session
 CANCEL    = "CANCEL"      # either → either: abort
 ERROR     = "ERROR"       # either → either: fatal error
-
-# ── UDP discovery message types ─────────────────────────────────────────────
-HELLO     = "HELLO"       # periodic peer announcement
-BYE       = "BYE"         # graceful-shutdown notification
-
 
 _HEADER_LEN_FMT  = ">I"                     # 4-byte big-endian unsigned int
 _HEADER_LEN_SIZE = struct.calcsize(_HEADER_LEN_FMT)
@@ -114,21 +105,3 @@ def _recv_exact(sock, n: int) -> bytes:
             )
         buf.extend(chunk)
     return bytes(buf)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# UDP framing (discovery)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def encode_udp(msg_type: str, **fields) -> bytes:
-    """Serialise one discovery packet to bytes (single UDP datagram)."""
-    return json.dumps({"type": msg_type, **fields}).encode("utf-8")
-
-
-def decode_udp(data: bytes) -> dict | None:
-    """Parse one UDP datagram. Returns None on malformed input."""
-    try:
-        msg = json.loads(data.decode("utf-8"))
-        return msg if isinstance(msg, dict) and "type" in msg else None
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        return None

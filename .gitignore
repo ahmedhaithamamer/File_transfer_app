@@ -1,0 +1,62 @@
+# Python bytecode/cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Test/coverage caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Build/distribution artifacts
+build/
+
+*.egg-info/
+*.spec
+
+# IDE/editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# App runtime/generated data
+received_files/
+*.log
+
+# LaTeX outputs (documentation)
+documentaion/*.aux
+documentaion/*.bbl
+documentaion/*.bcf
+documentaion/*.blg
+documentaion/*.fdb_latexmk
+documentaion/*.fls
+documentaion/*.lof
+documentaion/*.log
+documentaion/*.lot
+documentaion/*.out
+documentaion/*.run.xml
+documentaion/*.synctex.gz
+documentaion/*.toc
+documentaion/*.pdf
+documentaion
+
+docs/*.md
+dist/LANShare
+dist/*.rar
+dist/received_files
+
+/*.pdf
+NETWORKING.md

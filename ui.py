@@ -8,6 +8,7 @@ All cross-thread communication uses queue.Queue because Tkinter is
 NOT thread-safe: only the main thread may touch widgets directly.
 """
 
+import json
 import os
 import queue
 import threading
@@ -16,7 +17,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 import transfer
-from config import SAVE_DIR, TCP_PORT
+from config import PEERS_FILE, SAVE_DIR, TCP_PORT
 from utils import Device, format_size, format_speed
 
 
@@ -53,6 +54,7 @@ class LanShareApp(tk.Tk):
         self._q: "queue.Queue[tuple]"       = queue.Queue()
 
         self._build_ui()
+        self._load_peers()
 
         # ── Start TCP receive server ─────────────────────────────────────────
         self._stop_server = threading.Event()
@@ -148,6 +150,10 @@ class LanShareApp(tk.Tk):
             relief="flat", activestyle="none", highlightthickness=0,
         )
         self._peer_list.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        self._peer_list.bind("<Button-3>", self._on_peer_right_click)
+        self._peer_menu = tk.Menu(self, tearoff=0)
+        self._peer_menu.add_command(label="Edit", command=self._edit_selected_peer)
+        self._peer_menu.add_command(label="Delete", command=self._remove_peer)
 
         # ── Right pane ───────────────────────────────────────────────────────
         right = tk.Frame(body, bg=BG)
@@ -176,6 +182,11 @@ class LanShareApp(tk.Tk):
                   activebackground=SURFACE2, activeforeground=FG,
                   cursor="hand2", padx=12, pady=6,
                   command=self._clear_files).pack(side="left", padx=8)
+        tk.Button(btn_row2, text="Open Received Folder",
+                  bg=SURFACE2, fg=FG, font=FONT_BOLD, relief="flat",
+                  activebackground=SURFACE2, activeforeground=FG,
+                  cursor="hand2", padx=12, pady=6,
+                  command=self._open_received_folder).pack(side="left")
         self._send_btn = tk.Button(btn_row2, text="Send",
                   bg=ACCENT, fg="white", font=FONT_BOLD, relief="flat",
                   activebackground=ACCENT_HV, activeforeground="white",
@@ -239,9 +250,8 @@ class LanShareApp(tk.Tk):
                 messagebox.showinfo("Already added", f"{ip}:{port} is already in the list.")
                 return
 
-        peer = {"name": name, "ip": ip, "port": port}
-        self._peers.append(peer)
-        self._peer_list.insert("end", f"  {name}  —  {ip}:{port}")
+        self._add_peer_entry(name=name, ip=ip, port=port)
+        self._save_peers()
 
         # Clear inputs
         self._ip_var.set("")
@@ -255,7 +265,87 @@ class LanShareApp(tk.Tk):
         idx = sel[0]
         removed = self._peers.pop(idx)
         self._peer_list.delete(idx)
+        self._save_peers()
         self._append_log(f"Peer removed: {removed['name']}")
+
+    def _on_peer_right_click(self, event: tk.Event) -> None:
+        idx = self._peer_list.nearest(event.y)
+        if idx < 0 or idx >= len(self._peers):
+            return
+        self._peer_list.selection_clear(0, "end")
+        self._peer_list.selection_set(idx)
+        self._peer_list.activate(idx)
+        self._peer_menu.tk_popup(event.x_root, event.y_root)
+        self._peer_menu.grab_release()
+
+    def _edit_selected_peer(self) -> None:
+        sel = self._peer_list.curselection()
+        if not sel:
+            return
+        idx = sel[0]
+        peer = self._peers[idx]
+        self._open_edit_peer_dialog(idx, peer)
+
+    def _open_edit_peer_dialog(self, idx: int, peer: dict) -> None:
+        top = tk.Toplevel(self)
+        top.title("Edit Peer")
+        top.configure(bg=BG)
+        top.transient(self)
+        top.grab_set()
+        top.resizable(False, False)
+
+        name_var = tk.StringVar(value=str(peer.get("name", "")))
+        ip_var = tk.StringVar(value=str(peer.get("ip", "")))
+        port_var = tk.StringVar(value=str(peer.get("port", TCP_PORT)))
+
+        form = tk.Frame(top, bg=BG, padx=16, pady=14)
+        form.pack(fill="both", expand=True)
+
+        tk.Label(form, text="Label", font=FONT_BODY, bg=BG, fg=FG_DIM).grid(row=0, column=0, sticky="w")
+        tk.Entry(form, textvariable=name_var, font=FONT_BODY, bg=SURFACE2, fg=FG,
+                 insertbackground=FG, relief="flat", width=28).grid(row=0, column=1, padx=(10, 0), pady=(0, 8))
+
+        tk.Label(form, text="IP Address", font=FONT_BODY, bg=BG, fg=FG_DIM).grid(row=1, column=0, sticky="w")
+        tk.Entry(form, textvariable=ip_var, font=FONT_BODY, bg=SURFACE2, fg=FG,
+                 insertbackground=FG, relief="flat", width=28).grid(row=1, column=1, padx=(10, 0), pady=(0, 8))
+
+        tk.Label(form, text="Port", font=FONT_BODY, bg=BG, fg=FG_DIM).grid(row=2, column=0, sticky="w")
+        tk.Entry(form, textvariable=port_var, font=FONT_BODY, bg=SURFACE2, fg=FG,
+                 insertbackground=FG, relief="flat", width=28).grid(row=2, column=1, padx=(10, 0), pady=(0, 8))
+
+        btns = tk.Frame(form, bg=BG)
+        btns.grid(row=3, column=0, columnspan=2, sticky="e", pady=(8, 0))
+
+        def _save_edit() -> None:
+            ip = ip_var.get().strip()
+            name = name_var.get().strip() or ip
+            try:
+                port = int(port_var.get().strip())
+            except ValueError:
+                messagebox.showerror("Invalid port", "Port must be a number.", parent=top)
+                return
+            if not ip:
+                messagebox.showerror("No IP", "IP address cannot be empty.", parent=top)
+                return
+
+            for i, p in enumerate(self._peers):
+                if i != idx and p["ip"] == ip and p["port"] == port:
+                    messagebox.showerror("Duplicate peer", f"{ip}:{port} already exists.", parent=top)
+                    return
+
+            self._peers[idx] = {"name": name, "ip": ip, "port": port}
+            self._peer_list.delete(idx)
+            self._peer_list.insert(idx, f"  {name}  —  {ip}:{port}")
+            self._peer_list.selection_clear(0, "end")
+            self._peer_list.selection_set(idx)
+            self._save_peers()
+            self._append_log(f"Peer updated: {name} ({ip}:{port})")
+            top.destroy()
+
+        tk.Button(btns, text="Cancel", font=FONT_BOLD, bg=SURFACE2, fg=FG_DIM,
+                  relief="flat", padx=14, pady=5, command=top.destroy).pack(side="right", padx=(8, 0))
+        tk.Button(btns, text="Save", font=FONT_BOLD, bg=ACCENT, fg="white",
+                  relief="flat", padx=18, pady=5, command=_save_edit).pack(side="right")
 
     # ── File management ──────────────────────────────────────────────────────
 
@@ -268,6 +358,15 @@ class LanShareApp(tk.Tk):
     def _clear_files(self) -> None:
         self._files = []
         self._refresh_files_label()
+
+    def _open_received_folder(self) -> None:
+        os.makedirs(self.save_dir, exist_ok=True)
+        try:
+            os.startfile(self.save_dir)  # type: ignore[attr-defined]
+        except AttributeError:
+            messagebox.showinfo("Folder path", f"Received files folder:\n{self.save_dir}")
+        except OSError as exc:
+            messagebox.showerror("Open folder failed", f"Could not open folder:\n{exc}")
 
     def _refresh_files_label(self) -> None:
         if not self._files:
@@ -301,6 +400,7 @@ class LanShareApp(tk.Tk):
                 filepaths=files,
                 sender_name=self.device.name,
                 sender_id=self.device.device_id,
+                sender_tcp_port=self.tcp_port,
                 on_log=      lambda m:       self._q.put(("log",      m)),
                 on_progress= lambda d, t, s: self._q.put(("progress", d, t, s)),
             )
@@ -319,6 +419,8 @@ class LanShareApp(tk.Tk):
             files  = request_msg.get("manifest", [])
             sender = request_msg.get("sender_name", "Unknown")
             total  = int(request_msg.get("total_size", 0))
+            sender_ip = str(request_msg.get("sender_ip", "")).strip()
+            sender_port = int(request_msg.get("sender_tcp_port") or TCP_PORT)
 
             top = tk.Toplevel(self)
             top.configure(bg=BG)
@@ -332,6 +434,9 @@ class LanShareApp(tk.Tk):
                      padx=20, pady=14).pack(anchor="w")
             tk.Label(top, text=f"{len(files)} file(s)  •  {format_size(total)}",
                      font=FONT_BODY, bg=BG, fg=FG_DIM, padx=20).pack(anchor="w")
+            if sender_ip:
+                tk.Label(top, text=f"From: {sender_ip}:{sender_port}",
+                         font=FONT_BODY, bg=BG, fg=FG_DIM, padx=20).pack(anchor="w")
 
             list_frame = tk.Frame(top, bg=SURFACE2)
             list_frame.pack(fill="x", padx=20, pady=12)
@@ -363,7 +468,70 @@ class LanShareApp(tk.Tk):
 
         self.after(0, _open)
         decided.wait(timeout=120.0)
-        return bool(result["accepted"])
+        accepted = bool(result["accepted"])
+        if accepted:
+            self._auto_add_peer_from_request(request_msg)
+        return accepted
+
+    def _auto_add_peer_from_request(self, request_msg: dict) -> None:
+        sender_ip = str(request_msg.get("sender_ip", "")).strip()
+        if not sender_ip:
+            return
+        sender_port = int(request_msg.get("sender_tcp_port") or TCP_PORT)
+        sender_name = str(request_msg.get("sender_name", "")).strip() or sender_ip
+
+        for p in self._peers:
+            if p["ip"] == sender_ip and p["port"] == sender_port:
+                return
+
+        self._add_peer_entry(name=sender_name, ip=sender_ip, port=sender_port)
+        self._save_peers()
+        self._append_log(f"Auto-saved peer: {sender_name} ({sender_ip}:{sender_port})")
+
+    def _add_peer_entry(self, *, name: str, ip: str, port: int) -> None:
+        peer = {"name": name, "ip": ip, "port": port}
+        self._peers.append(peer)
+        self._peer_list.insert("end", f"  {name}  —  {ip}:{port}")
+
+    def _load_peers(self) -> None:
+        try:
+            if not os.path.isfile(PEERS_FILE):
+                return
+            with open(PEERS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, list):
+                return
+
+            loaded = 0
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                ip = str(item.get("ip", "")).strip()
+                if not ip:
+                    continue
+                try:
+                    port = int(item.get("port", TCP_PORT))
+                except (TypeError, ValueError):
+                    continue
+                name = str(item.get("name", "")).strip() or ip
+
+                duplicate = any(p["ip"] == ip and p["port"] == port for p in self._peers)
+                if duplicate:
+                    continue
+                self._add_peer_entry(name=name, ip=ip, port=port)
+                loaded += 1
+
+            if loaded:
+                self._append_log(f"Loaded {loaded} saved peer(s).")
+        except (OSError, json.JSONDecodeError):
+            self._append_log("Could not load saved peers; starting with empty list.")
+
+    def _save_peers(self) -> None:
+        try:
+            with open(PEERS_FILE, "w", encoding="utf-8") as f:
+                json.dump(self._peers, f, indent=2)
+        except OSError as exc:
+            self._append_log(f"Failed to save peers: {exc}")
 
     # ── Queue polling ────────────────────────────────────────────────────────
 

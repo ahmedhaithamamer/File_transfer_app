@@ -82,6 +82,7 @@ def send_files(
     filepaths: list[str],
     sender_name: str,
     sender_id:   str,
+    sender_tcp_port: int | None = None,
     on_log:      Callable[[str], None]                 = lambda m: None,
     on_progress: Callable[[int, int, float], None]     = lambda d, t, s: None,
     cancel_flag: threading.Event | None                 = None,
@@ -120,6 +121,7 @@ def send_files(
         protocol.send_msg(
             sock, protocol.REQUEST,
             sender_name=sender_name, sender_id=sender_id,
+            sender_tcp_port=sender_tcp_port,
             manifest=manifest, total_size=total, file_count=len(manifest),
         )
         on_log(f"Awaiting receiver to accept ({format_size(total)}) …")
@@ -265,6 +267,7 @@ def _handle_connection(
 
         manifest = msg.get("manifest", [])
         total    = int(msg.get("total_size", 0))
+        msg["sender_ip"] = addr[0]
         on_log(f"Request from {msg.get('sender_name','?')}: "
                f"{len(manifest)} file(s), {format_size(total)}")
 
